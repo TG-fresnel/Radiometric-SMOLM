@@ -5,6 +5,10 @@ Created on Thu Oct 10 13:45:15 2024
 @author: Tobias
 """
 import numpy as np 
+
+from scipy.signal import convolve2d
+from skimage.draw import ellipse_perimeter
+from skimage.morphology import binary_erosion,binary_dilation,remove_small_holes,remove_small_objects,square
 #%%from ProcessingTools
 
 def Vflip(array):
@@ -32,6 +36,28 @@ def take_from(array, width, center):
     right = min(length_x, center[1] + k + 1 + step_x)
 
     return array[up: down, left: right]
+
+def binarize(image, threshold=1, radius=1, smin=1000):
+    """ The following function binarizes the image and then eliminates
+	small holes and/or small objects.
+
+	Arguments:
+	    threshold (float): multiplicative factor with respect the mean of the array
+	    radius (float): radius of the erosion and dilation steps
+	    smin (int):  minimum elements for a hole or an object to not be removed
+	"""
+
+    # First we threshold the image with respect its mean and the given factor
+    mask = (image > (threshold * np.mean(image)));
+    # Erode to eliminatte noise
+    mask = binary_erosion(mask, square(radius));
+    # Dilate back
+    mask = binary_dilation(mask, square(radius));
+    # Remove small holes within the windows
+    mask = remove_small_holes(mask, smin)
+    # Remove small objects within the windows
+    mask = remove_small_objects(mask, smin)
+    return mask
 
 
 #%%
@@ -142,11 +168,30 @@ def extract_masks(ROI_masks, ROI_props, extra_box_pixels = 0):
     return extracted_masks.astype(int)
 
 
+def conv_psf_finder(img,masks):
+    convolved_img_stack = np.zeros((*img.shape,len(masks)+1))
+    convolved_img_stack[...,0] = img
+    
+    for i,mask in enumerate(masks):
+           convolved_img_stack[...,i+1] =  convolve2d(img,mask,mode='same')
+           
+    stack_diff = np.diff(convolved_img_stack, axis=2)
+    final = np.all(stack_diff< 0, axis=2)
+    #compact way to check each convolved array is smaller thasn the previous one 
+
+    return final     
 
 
 
+def ellips_perimeter_mask(maj_ax,min_ax,orientation=0):
+    
+   
+    
+    img = np.zeros((maj_ax*2+1, maj_ax*2+1), dtype=np.uint8)
+    rr, cc = ellipse_perimeter(maj_ax, maj_ax,maj_ax,min_ax,orientation,shape=img.shape)
+    img[rr, cc] = 1
 
-
+    return img[min(rr):max(rr)+1,min(cc):max(cc)+1]/img.sum()
 
 
 
