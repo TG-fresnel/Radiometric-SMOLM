@@ -39,6 +39,7 @@ properties = ('centroid','orientation','axis_major_length','axis_minor_length','
 ROI_props_dict = regionprops_table(ROI_masks,properties=properties)
 ROI_props = pd.DataFrame.from_dict(ROI_props_dict)
 
+#order ROIs in sucha a way that the radial channel is 0 and the azimuthal ones are ordered clockwise
 ROI_props, ROI_masks = auto_order_ROI(ROI_props,ROI_masks)
 
 

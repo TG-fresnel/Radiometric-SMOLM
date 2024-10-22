@@ -5,10 +5,11 @@ Created on Thu Oct 10 13:45:15 2024
 @author: Tobias
 """
 import numpy as np 
+import matplotlib.pyplot as plt
 
 from scipy.signal import convolve2d
 from skimage.draw import ellipse_perimeter
-from skimage.morphology import binary_erosion,binary_dilation,remove_small_holes,remove_small_objects,square,convex_hull_object
+from skimage.morphology import binary_erosion,binary_dilation,remove_small_holes,remove_small_objects,square,convex_hull_object,disk,erosion
 from skimage.measure import find_contours,label,regionprops_table
 from scipy.spatial import distance_matrix
 #%%from ProcessingTools
@@ -312,25 +313,274 @@ def extract_masks(ROI_masks, ROI_props, extra_box_pixels = 0):
  
             extracted_masks[i,...] = extracted_masks[i,...]==(i+1)
             
-    return extracted_masks.astype(int)
+    return extracted_masks.astype(bool)
 
 #%%functions related to PSF detection
-def conv_psf_finder(img,masks):
-    convolved_img_stack = np.zeros((*img.shape,len(masks)+1))
-    convolved_img_stack[...,0] = img
+def get_conv_masks(orientation,minor_major_axis_ratio,mininmal_axis_length,maximal_axis_length):
+    """
+    Generate convolution masks based on the specified orientation and axis ratios of ellipses.
+
+    Parameters
+    ----------
+    orientation : list of float
+        A list containing the orientation of each channel's point spread function (PSF) with respect to the vertical.
+        The length of the list must correspond to the number of channels.
+    minor_major_axis_ratio : list of float
+        A list containing the ratio between the minor axis and the major axis of the ellipses.
+        The length of the list must correspond to the number of channels.
+    minimal_axis_length : int
+        The length of the major axis of the smallest ellipse.
+    maximal_axis_length : int
+        The length of the major axis of the largest ellipse.
+
+    Returns
+    -------
+    conv_masks : list
+        A list of masks generated for each channel based on the specified parameters. Each mask represents 
+        an ellipse perimeter defined by the corresponding orientation, major axis length, and minor axis length.
+
+    """
     
-    for i,mask in enumerate(masks):
-           convolved_img_stack[...,i+1] =  convolve2d(img,mask,mode='same')
-           
-    stack_diff = np.diff(convolved_img_stack, axis=2)
-    final = np.all(stack_diff< 0, axis=2)
-    #compact way to check each convolved array is smaller thasn the previous one 
 
-    return final     
+    conv_masks = []
+    
+    #l lenght of major axis, index to assign values to conv_masks array
+    for i,l in enumerate(range(mininmal_axis_length,maximal_axis_length)):
+        
+        major_axis_length   = l
+        minor_axis_length = np.round(l * minor_major_axis_ratio).astype(int)
+        conv_masks.append( ellips_perimeter_mask(major_axis_length,minor_axis_length,  orientation))
+        
+    return conv_masks
+    
+
+def create_conv_mask_dict(orientation_list, minor_major_axis_ratio_list, minimal_axis_length, maximal_axis_length):
+    """
+    Create a dictionary of convolution masks for each channel based on the provided orientation
+    and minor-to-major axis ratio of ellipses.
+
+    Parameters
+    ----------
+    orientation_list : list of float
+        A list containing the orientations of each channel's ellipses with respect to the vertical.
+        The length of the list must correspond to the number of channels.
+    minor_major_axis_ratio_list : list of float
+        A list containing the ratios of the minor axis to the major axis for each channel's ellipses.
+        The length of the list must correspond to the number of channels.
+    minimal_axis_length : int
+        The length of the major axis of the smallest ellipse.
+    maximal_axis_length : int
+        The length of the major axis of the largest ellipse.
+
+    Returns
+    -------
+    conv_masks_dict : dict
+        A dictionary where keys are channel identifiers (e.g., 'channel0', 'channel1', etc.)
+        and values are the convolution masks generated for each channel.
+    
+    Raises
+    ------
+    ValueError
+        If the lengths of the orientation_list and minor_major_axis_ratio_list do not match.
+    """
+    
+    # Validate that both lists have the same length
+    if len(orientation_list) != len(minor_major_axis_ratio_list):
+        raise ValueError("Both lists must have the same length.")
+
+    N_channels = len(orientation_list)
+    conv_masks_dict = {}
+
+    for channel_index in range(N_channels):
+        # Get orientation and axis ratio for the current channel
+        channel_orientation = orientation_list[channel_index] 
+        channel_minor_major_axis_ratio = minor_major_axis_ratio_list[channel_index]
+
+        # Create and store the convolution mask in the dictionary
+        conv_masks_dict[f'channel{channel_index}'] = get_conv_masks(
+            channel_orientation,
+            channel_minor_major_axis_ratio,
+            mininmal_axis_length=minimal_axis_length,
+            maximal_axis_length=maximal_axis_length
+        )
+
+    return conv_masks_dict
 
 
+def detect_psf_areas(image, masks, show_all_plots=False, show_final_plot=False):
+    """
+    Identify areas in the input image that correspond to point spread functions (PSFs) 
+    by convolving the image with a set of masks and detecting regions where the convolution results consistently decrease.
+
+    Parameters
+    ----------
+    image : numpy.ndarray
+        The input image to be convolved. It should be a 2D array representing grayscale image data.
+    masks : list of numpy.ndarray
+        A list of 2D arrays representing convolution masks (point spread functions) to be applied to the image.
+    show_all_plots : bool, optional
+        If True, plots the masks, the convolved images, and the areas where the convolved images decrease.
+        Default is False.
+    show_final_plot : bool, optional
+        If True, plots the original image with contours indicating the detected PSF areas.
+        Default is False.
+
+    Returns
+    -------
+    numpy.ndarray
+        A boolean array where True indicates areas of the image that are identified as PSFs,
+        based on the condition that each convolved result is less than the previous one.
+
+    Notes
+    -----
+    The function generates a stack of convolved images and computes the differences between successive
+    convolutions. Areas where each convolved image is less than the previous one are considered to 
+    represent PSFs.
+    """
+    
+    # Initialize an array to hold the convolved image stack
+    convolved_images = np.zeros((*image.shape, len(masks) + 1))
+    convolved_images[..., 0] = image  # Assign the original image to the first layer
+
+    # Perform convolution with each mask
+    for i, mask in enumerate(masks):
+        convolved_images[..., i + 1] = convolve2d(image, mask, mode='same')
+
+    # Compute the differences between successive convolved images
+    convolution_differences = np.diff(convolved_images, axis=2)
+    
+    # Identify areas where all differences are less than 0, indicating potential PSFs
+    psf_mask = np.all(convolution_differences < 0, axis=2)
+
+    # Plot all masks and convolved images if requested
+    if show_all_plots: 
+        fig1, axes1 = plt.subplots(3, len(masks), layout='constrained', figsize=(3 * len(masks), 9))
+        
+        for i, mask in enumerate(masks):
+            axes1[0, i].imshow(mask)
+            axes1[0, i].set_title(f'Mask {i + 1}')
+            axes1[0, i].axis('off')
+
+            axes1[1, i].imshow(convolved_images[..., i + 1])
+            axes1[1, i].set_title(f'Convolved Image {i + 1}')
+            axes1[1, i].axis('off')
+
+            axes1[2, i].imshow(np.all(convolution_differences[..., :i + 1] < 0, axis=2))
+            axes1[2, i].set_title(f'Detected PSF')
+            axes1[2, i].axis('off')
+
+    # Plot the final result indicating detected PSF areas if requested
+    if show_final_plot:
+        fig2, axes2 = plt.subplots(1, 1, layout='constrained', figsize=(6, 6))
+        axes2.imshow(image, cmap='gray')
+        axes2.contour(psf_mask, alpha=0.5, colors='yellow', linewidths=1)
+        axes2.set_title('Detected PSF Areas')
+        axes2.axis('off')
+
+    return psf_mask
+
+
+
+def detect_psf_areas_all_channels(data, masks_dict, show_all_plots=False, show_final_plot=False):
+    """
+    Detect point spread function (PSF) areas across multiple channels in a 3D image stack
+    by applying corresponding masks to each channel and using the PSF detection algorithm.
+
+    Parameters
+    ----------
+    data : numpy.ndarray
+        A 3D array where each slice along the third dimension represents a separate channel of image data.
+    masks_dict : dict
+        A dictionary where keys are channel identifiers (e.g., 'channel0') and values are lists of masks
+        to be applied to the corresponding channel for PSF detection.
+    show_all_plots : bool, optional
+        If True, plots the PSF detection results for all channels. Default is False.
+    show_final_plot : bool, optional
+        If True, plots the final detection results overlaid on the original images. Default is False.
+
+    Returns
+    -------
+    numpy.ndarray
+        A 3D array of the same shape as the input `data`, where each slice represents the PSF
+        detection results for the corresponding channel.
+    """
+    
+    N_channels = data.shape[0]
+    detected_psfs = np.zeros_like(data,dtype=bool)
+    
+    
+    for channel_idx in range(N_channels):
+        # Extract the image for the current channel
+        image = data[channel_idx,...]
+        masks = masks_dict[f'channel{channel_idx}']
+        
+        # Detect PSF areas for the current channel
+        detected_psfs[channel_idx,...] = detect_psf_areas(image, masks, show_all_plots=show_all_plots, show_final_plot=show_final_plot)
+        
+    return detected_psfs
+
+
+
+def open_masks_area(masks, min_size):
+    """
+    Perform area opening on a 3D stack of masks to remove small objects.
+
+    Parameters
+    ----------
+    masks : numpy.ndarray
+        A 3D array where each slice corresponds to a different binary mask to be opened.
+    min_size : int
+        Minimum size of objects to retain in the masks. Objects smaller than this will be removed.
+
+    Returns
+    -------
+    numpy.ndarray
+        A 3D array of the same shape as the input `masks`, containing the opened masks.
+    """
+    
+    opened_masks = np.zeros_like(masks, dtype=masks.dtype)  # Initialize the output array
+
+    # Process each mask in the 3D stack
+    for channel_idx in range(masks.shape[0]):
+        # Apply area opening to the current mask and store it in the output array
+        opened_masks[channel_idx, ...] = remove_small_objects(masks[channel_idx, ...],min_size=min_size)
+
+    return opened_masks
+
+
+
+def erode_masks_with_disk(masks, footprint_radius):
+    """
+    Erode a 3D stack of masks using a disk-shaped footprint of a given radius.
+
+    Parameters
+    ----------
+    masks : numpy.ndarray
+        A 3D array where each slice corresponds to a different mask to be eroded.
+    footprint_radius : int
+        Radius of the disk used for the erosion operation.
+
+    Returns
+    -------
+    numpy.ndarray
+        A 3D array of the same shape as the input `masks`, containing the eroded masks.
+    """
+    
+    # Create the erosion mask using the specified footprint radius
+    erosion_mask = disk(footprint_radius)
+    eroded_masks = np.zeros_like(masks)  # Initialize the output array with the same shape as input masks
+
+    # Process each mask in the 3D stack
+    for channel_idx in range(masks.shape[0]):
+        # Apply erosion to the current mask and store it in the output array
+        eroded_masks[channel_idx, ...] = erosion(masks[channel_idx, ...], erosion_mask)
+
+    return eroded_masks
+
+        
 
 def ellips_perimeter_mask(maj_ax,min_ax,orientation=0):
+    
     
    
     
