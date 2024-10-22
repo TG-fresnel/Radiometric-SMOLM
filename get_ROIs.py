@@ -19,7 +19,7 @@ from rSMOLM_module import *
 
 #%%
 
-extra_box_pixels= 10 #additional margin of masks
+extra_box_pixels= 0 #additional margin of masks
 img_path = 'data/Img_for_ROI.tif' #file of image to define ROI
 analysis_path =  'data/' #directory where ROI.pkl and ROI_masks.npy will be saved
 
