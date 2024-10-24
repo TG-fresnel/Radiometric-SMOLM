@@ -89,7 +89,29 @@ limits_all_channels = {
     }
 
 
-dict_PSF_dfs = extract_psf_data_for_all_channels(PSF_data,data_masked,12)#,limits_all_channels)
+dict_PSF_dfs = extract_psf_data_for_all_channels(PSF_data,data_masked,12,limits_all_channels)
+
+
+dict_affine_transforms = get_affine_all_channels(dict_PSF_dfs)
+
+
+#%%
+
+with open('affine_transforms.pkl', 'wb') as pickle_file:
+    pickle.dump(dict_affine_transforms, pickle_file)        
+        
+#%%
+    
+with open('affine_transforms.pkl', 'rb') as pickle_file:
+    dict_affine_transforms_loaded = pickle.load(pickle_file)
+
+    
+
+    
+#%%
+plot_affine_transformation(dict_PSF_dfs,'channel0','channel2',img_data = data_masked[0])
+
+
 #%%
 show_PSFs_channel(data_masked,dict_PSF_dfs,0)
 #%%checking all overlap of all detcted points
@@ -97,6 +119,8 @@ for column,df in dict_PSF_dfs.items():
     coords = get_coords(df)
     plt.scatter(coords[:,1],coords[:,0],marker = 'x')
 plt.imshow(data_unmasked[0])
+
+#%%
 
 
 

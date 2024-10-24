@@ -11,7 +11,8 @@ import pandas as pd
 from scipy.signal import convolve2d
 from skimage.draw import ellipse_perimeter
 from skimage.morphology import binary_erosion,binary_dilation,remove_small_holes,remove_small_objects,square,convex_hull_object,disk,erosion
-from skimage.measure import find_contours,label,regionprops_table
+from skimage.measure import find_contours,label,regionprops_table,ransac
+from skimage.transform import AffineTransform
 from scipy.spatial import distance_matrix
 from scipy.optimize import curve_fit
 from tqdm import tqdm 
@@ -726,10 +727,6 @@ def extract_and_fit_psf_data(binary_psf_img, intensity_image, PSF_windowsize):
     return df
 
 
-
-#%%
-
-
 #%%Gaus fitting
 
 def extract_PSF(img, windowsize, coords):
@@ -1127,7 +1124,199 @@ def PSF_gauss_plot(img):
     
     plt.subplot(122)
     plt.imshow(fit_data)
+#%% affine tranformation 
+
+
+def get_affine(points_to_move,reference_points,min_samples=3,residual_threshold=2,max_trials=1000):
+    """
+    Estimate the affine transformation matrix that best aligns two sets of points using RANSAC.
+
+    Parameters
+    ----------
+    points_to_move : array_like, shape (n, m)
+        The coordinates of the points to be moved, where `n` is the number of points
+        and `m` is the dimensionality (e.g., 2 for 2D points).
+
+    reference_points : array_like, shape (k, m)
+        The coordinates of the reference points, where `k` is the number of points
+        and `m` is the dimensionality. Should be at least as many as `points_to_move`.
+
+    min_samples : int, optional
+        Minimum number of samples to use in each RANSAC iteration. Default is 3.
+
+    residual_threshold : float, optional
+        Maximum distance for a data point to be considered a fitting inlier. Default is 2.
+
+    max_trials : int, optional
+        Maximum number of RANSAC iterations to perform. Default is 1000.
+
+    Returns
+    -------
+    model_robust : AffineTransform
+        The estimated affine transformation model that maps `points_to_move` to `reference_points`.
+        This is an instance of the `AffineTransform` class, containing the transformation parameters.
+
+    Notes
+    -----
+    If the number of `reference_points` is less than the number of `points_to_move`, 
+    the function selects the closest points from `points_to_move` to match the 
+    `reference_points` using the distance matrix. Otherwise, it selects the closest 
+    `reference_points` to the `points_to_move`.
+
+    Raises
+    ------
+    ValueError
+        If the input arrays do not have compatible shapes or if there are insufficient points
+        for a robust estimation.
+    """
+
+    dist_M = distance_matrix(points_to_move, reference_points)
     
+    if len(reference_points) < len(points_to_move):
+        closest_idx = dist_M.argmin(axis=0)
+        points_to_move = np.array(points_to_move)[closest_idx]
+        reference_points = np.array(reference_points)
+    
+        
+    else:
+        closest_idx = dist_M.argmin(axis=1)
+        reference_points = np.array(reference_points)[closest_idx]
+        points_to_move = np.array(points_to_move)
+        
+    
+    
+    model_robust, inliers = ransac(
+        (points_to_move,reference_points),
+        AffineTransform,
+        min_samples=min_samples,
+        residual_threshold=residual_threshold,
+        max_trials=max_trials
+        )
+    
+    
+    
+    return model_robust
+
+
+def get_affine_all_channels(dict_PSF_dfs,main_channel = 0,min_samples=3,residual_threshold=2,max_trials=1000):
+    """
+    Estimate affine transformations for all channels relative to a main channel.
+
+    This function computes affine transformation matrices for a set of channels
+    stored in a dictionary, aligning each channel to a specified main channel based
+    on their spatial coordinates.
+
+    Parameters
+    ----------
+    dict_PSF_dfs : dict of DataFrame
+        A dictionary where keys are channel names (e.g., 'channel0', 'channel1', etc.)
+        and values are DataFrames containing the coordinates for each channel.
+
+    main_channel : int, optional
+        The index of the main channel to which all other channels will be aligned. 
+        Default is 0, which corresponds to 'channel0'.
+
+    min_samples : int, optional
+        Minimum number of samples to use in each RANSAC iteration. Default is 3.
+
+    residual_threshold : float, optional
+        Maximum distance for a data point to be considered a fitting inlier. Default is 2.
+
+    max_trials : int, optional
+        Maximum number of RANSAC iterations to perform. Default is 1000.
+
+    Returns
+    -------
+    dict_affine_transforms : dict
+        A dictionary containing the estimated affine transformations for each channel,
+        with keys formatted as 'channelX->channelY' indicating the source and target channels.
+
+    Raises
+    ------
+    KeyError
+        If the specified main channel does not exist in the dictionary of DataFrames.
+    ValueError
+        If there are insufficient coordinates for the affine transformation estimation.
+    """
+    
+    main_channel_name = f'channel{main_channel}'
+    main_channel_df = dict_PSF_dfs[main_channel_name]
+    
+    channel_names = list(dict_PSF_dfs.keys())
+    
+    channels_to_link = channel_names
+    channels_to_link.remove(main_channel_name)
+    
+    dict_affine_transforms = {}
+    
+    for channel in channels_to_link:
+        
+        channel_to_link_df = dict_PSF_dfs[channel]
+        
+        coords_target = get_coords(main_channel_df,x_name='x0_global',y_name='y0_global',keep_nans = False)
+        coords_to_tranform = get_coords(channel_to_link_df,x_name='x0_global',y_name='y0_global',keep_nans = False)
+        
+        affine = get_affine(coords_to_tranform, coords_target)
+        
+        dict_affine_transforms[f'{channel}->{main_channel_name}'] = affine
+        
+    return dict_affine_transforms
+    
+
+def plot_affine_transformation(dict_PSF_dfs, target_channel_name, source_channel_name, img_data=False):
+    """
+    Plot affine transformation between two channels and visualize the results.
+
+    Parameters
+    ----------
+    dict_PSF_dfs : dict of DataFrame
+        A dictionary where keys are channel names and values are DataFrames
+        containing the coordinates for each channel.
+
+    target_channel_name : str
+        The name of the channel to which the source channel will be transformed.
+
+    source_channel_name : str
+        The name of the channel that will be transformed.
+
+    img_data : array_like, optional
+        An optional image array to be displayed in the background of the plot. 
+        If provided, the image will be shown behind the scatter plots. Default is False.
+
+    Returns
+    -------
+    None
+    """
+    # Retrieve DataFrames for the specified channels
+    df_target_channel = dict_PSF_dfs[target_channel_name]
+    df_source_channel = dict_PSF_dfs[source_channel_name]
+
+    # Get coordinates for both channels
+    target_coordinates = get_coords(df_target_channel, x_name='x0_global', y_name='y0_global', keep_nans=False)
+    source_coordinates = get_coords(df_source_channel, x_name='x0_global', y_name='y0_global', keep_nans=False)
+
+    # Compute the affine transformation
+    affine_transform = get_affine(source_coordinates, target_coordinates)
+    
+    # Apply the transformation to the source channel's coordinates
+    transformed_coordinates = dict_affine_transforms[f'{source_channel_name}->{target_channel_name}'](source_coordinates)
+
+    # Plot the results
+    plt.figure(figsize=(8, 6))
+    plt.scatter(target_coordinates[:, 1], target_coordinates[:, 0], marker='x', label='Reference (Target)',c='r')
+    plt.scatter(source_coordinates[:, 1], source_coordinates[:, 0], marker='x', label='Initial (Source)',c='g')
+    plt.scatter(transformed_coordinates[:, 1], transformed_coordinates[:, 0], marker='x', label='Transformed',c='y')
+    plt.title(f'Affine Transformation: {source_channel_name} to {target_channel_name}')
+    plt.xlabel('X Coordinates')
+    plt.ylabel('Y Coordinates')
+    plt.legend()
+    
+    if img_data is not None:
+        plt.imshow(img_data)
+    
+    plt.show()
+
+
 #%%Processing of full channel data 
 
 def validate_limits_dict(all_channels_limits_dict, N_channels):
@@ -1282,7 +1471,7 @@ def remove_by_value(arr_in,val):
     
     return arr_out
     
-def get_coords(df,x_name = 'centroid-1',y_name = 'centroid-0'):
+def get_coords(df,x_name = 'centroid-1',y_name = 'centroid-0',keep_nans = False):
     """
     
 
@@ -1301,8 +1490,12 @@ def get_coords(df,x_name = 'centroid-1',y_name = 'centroid-0'):
         Array of dimension (n,2). With n beeing the number of rows in the original Dataframe
 
     """
+    coords = np.array([df[y_name],df[x_name]]).T
     
-    return np.array([df[y_name],df[x_name]]).T
+    if not keep_nans:
+        coords = coords[~np.isnan(coords).any(axis=1)]
+    
+    return coords
     
 
 
