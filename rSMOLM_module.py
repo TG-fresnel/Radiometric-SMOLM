@@ -6,12 +6,16 @@ Created on Thu Oct 10 13:45:15 2024
 """
 import numpy as np 
 import matplotlib.pyplot as plt
+import pandas as pd
 
 from scipy.signal import convolve2d
 from skimage.draw import ellipse_perimeter
 from skimage.morphology import binary_erosion,binary_dilation,remove_small_holes,remove_small_objects,square,convex_hull_object,disk,erosion
 from skimage.measure import find_contours,label,regionprops_table
 from scipy.spatial import distance_matrix
+from scipy.optimize import curve_fit
+from tqdm import tqdm 
+
 #%%from ProcessingTools
 
 def Vflip(array):
@@ -40,6 +44,74 @@ def take_from(array, width, center):
 
     return array[up: down, left: right]
 
+
+def extract_centered_square(array, width, center, return_anchor=False):
+    """
+    Extract a square subarray centered on specific coordinates from a 2D or 3D array.
+
+    Parameters
+    ----------
+    array : ndarray
+        The input array from which the subarray is extracted. Can be 2D or 3D.
+    width : int
+        The width of the square to extract. The square will be centered on the `center` coordinates.
+    center : tuple of float
+        The (y, x) coordinates of the center of the square. Can be floating point values,
+        which will be rounded to the nearest integers.
+    return_anchor : bool, optional
+        If True, the function will also return the top-left corner coordinates (anchor point)
+        of the extracted subarray as a tuple `(up, left)`. Default is False.
+
+    Returns
+    -------
+    subarray : ndarray
+        The extracted square subarray.
+    (subarray, (up, left)) : tuple, optional
+        If `return_anchor` is True, a tuple containing the subarray and the coordinates of the
+        top-left corner (anchor) is returned.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> arr = np.arange(25).reshape(5, 5)
+    >>> extract_centered_square(arr, 3, (2, 2))
+    array([[ 6,  7,  8],
+           [11, 12, 13],
+           [16, 17, 18]])
+
+    >>> extract_centered_square(arr, 3, (2.7, 2.4), return_anchor=True)
+    (array([[ 6,  7,  8],
+            [11, 12, 13],
+            [16, 17, 18]]), (1, 1))
+
+    """
+
+    if array.ndim == 2:
+        length_y, length_x = array.shape
+    elif array.ndim == 3:
+        length_y, length_x, _ = array.shape
+
+    # Round the center coordinates to nearest integers
+    center_y = round(center[0])
+    center_x = round(center[1])
+    
+    k = width // 2
+    n = width % 2
+    
+    up = max(0, center_y - k)
+    down = min(length_y, center_y + k + n)
+    left = max(0, center_x - k)
+    right = min(length_x, center_x + k + n)
+
+    if return_anchor:
+       
+        return array[up:down, left:right],(up,left)
+
+    else:
+  
+        return array[up:down, left:right]
+
+
 def binarize(image, threshold=1, radius=1, smin=1000):
     """ The following function binarizes the image and then eliminates
 	small holes and/or small objects.
@@ -67,7 +139,7 @@ def binarize(image, threshold=1, radius=1, smin=1000):
 def auto_order_ROI(ROI_props, ROI_masks):
     """
     Automatically reorder regions of interest (ROIs) by setting the central ROI as the 0th index 
-    and ordering the remaining ROIs in a clockwise manner, starting from a vertical line.
+    and ordering the remaining ROIs in a clockwise manner, with respect to the negative y-axis (up).
 
     Parameters
     ----------
@@ -93,6 +165,7 @@ def auto_order_ROI(ROI_props, ROI_masks):
     # Extract the centroid coordinates of each ROI
     centroids = get_coords(ROI_props)
 
+
     # Get the current order of ROI indices
     channels_index = list(ROI_props.index)
 
@@ -102,11 +175,12 @@ def auto_order_ROI(ROI_props, ROI_masks):
     # Shift centroid coordinates relative to the center
     shifted_centroids = centroids - center_coords
 
-    # Convert Cartesian coordinates of ROIs to polar angles (radians)
-    angles = xy_to_polar_angle(shifted_centroids[:, 1], shifted_centroids[:, 0])
-
+    # Convert Cartesian coordinates of ROIs to polar angles (radians),
+    angles = xy_to_polar_angle(shifted_centroids[:, 0], -shifted_centroids[:, 1])
     # Shift angles to reference them from the vertical line (y-axis)
-    angles = add_angles(angles, np.pi / 2)
+    angles = add_angles(angles, np.pi)
+
+
 
     # Identify the central ROI (the one closest to the center)
     radial_channel_idx = np.argmin(distance_center)
@@ -235,9 +309,9 @@ def extract_channels_from_single_frame(img,N_channels,box_length,ROI_centers):
     """
     data = np.zeros([N_channels,box_length, box_length])
 
-    for i in range(N_channels):
-      
-        data[i,:,:] =  take_from(img, box_length, ROI_centers[:,i])
+    for channel_idx in range(N_channels):
+
+        data[channel_idx,:,:] =  extract_centered_square(img, box_length, ROI_centers[:,channel_idx])
                        
         
     return data 
@@ -268,7 +342,7 @@ def load_data_from_single_frame(img_in, ROI_props, extra_box_pixels = 0):
     N_channels = len(ROI_props)
     
     #rounded integers of the center coordinates of each channel
-    ROI_centers = np.round(np.array([ROI_props['centroid-0'],ROI_props['centroid-1']])).astype(int)
+    ROI_centers = np.array([ROI_props['centroid-0'],ROI_props['centroid-1']])
 
     #Make uniform box length choosing the largest
     box_length = ( np.round(np.max([ROI_props['axis_major_length']])).astype(int) + extra_box_pixels)
@@ -289,7 +363,7 @@ def extract_masks(ROI_masks, ROI_props, extra_box_pixels = 0):
     ROI_props : dict
         dict that contains: 'centroid-0','centroid-1','axis_major_length'.
     extra_box_pixels : TYPE, optional
-        extra margin pixels when extracting channels. The default is 0.
+        extra margin pixels. The default is 0.
 
     Returns
     -------
@@ -301,7 +375,7 @@ def extract_masks(ROI_masks, ROI_props, extra_box_pixels = 0):
     N_channels = len(ROI_props)
     
     #rounded integers of the center coordinates of each channel
-    ROI_centers = np.round(np.array([ROI_props['centroid-0'],ROI_props['centroid-1']])).astype(int)
+    ROI_centers = np.array([ROI_props['centroid-0'],ROI_props['centroid-1']])
 
     #Make uniform box length choosing the largest
     box_length = ( np.round(np.max([ROI_props['axis_major_length']])).astype(int) + extra_box_pixels)
@@ -591,6 +665,551 @@ def ellips_perimeter_mask(maj_ax,min_ax,orientation=0):
     return img[min(rr):max(rr)+1,min(cc):max(cc)+1]/img.sum()
 
 
+
+def get_PSF_df(binary_psf_img, intensity_image, properties=('intensity_mean', 'centroid', 'num_pixels')):
+    """
+    Generate a DataFrame containing properties of regions in the input image.
+
+    Parameters
+    ----------
+    binary_psf_img : numpy.ndarray
+        The binary image that indicates which regions are considered PSFs
+    intensity_image : numpy.ndarray
+        The intensity image used to compute intensity-based properties.
+    properties : tuple of str, optional
+        The properties to measure for each region. Default is ('intensity_mean', 'centroid', 'num_pixels').
+
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame containing the measured properties for each region in the image.
+    """
+    
+    labeled_img = label(binary_psf_img)
+    regionprops = regionprops_table(labeled_img,
+                                    intensity_image=intensity_image,
+                                    properties=properties)
+    
+    df = pd.DataFrame(regionprops)
+
+    return df
+
+
+def extract_and_fit_psf_data(binary_psf_img, intensity_image, PSF_windowsize):
+    """
+    Extract PSF centroids from a binary PSF image, fit Gaussian functions to these PSFs, 
+    and combine the results into a single DataFrame.
+
+    Parameters
+    ----------
+    binary_psf_img : numpy.ndarray
+        A binary image where each PSF is represented by a distinct region.
+
+    intensity_image : numpy.ndarray
+        The corresponding intensity image from which the PSF characteristics will be derived.
+
+    PSF_windowsize : int
+        The size of the window around each PSF centroid used for fitting the Gaussian model.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame containing the combined data, including PSF centroids and the fitted Gaussian parameters.
+    """
+    df_centroids = get_PSF_df(binary_psf_img, intensity_image)
+    centroid_coords = get_coords(df_centroids)
+    
+    df_gauss = gauss_fit_all_PSFs(intensity_image, centroid_coords, PSF_windowsize)
+    
+    df = pd.concat([df_centroids, df_gauss], axis=1)
+    
+    return df
+
+
+
+#%%
+
+
+#%%Gaus fitting
+
+def extract_PSF(img, windowsize, coords):
+    """
+    Extract the Point Spread Function (PSF) from an image at specified coordinates.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        The input 2D image from which the PSF is to be extracted.
+    windowsize : int
+        The size of the window around the coordinates to extract the PSF.
+    coords : tuple of two floats or ints
+        The (x, y) coordinates around which the PSF will be extracted.
+
+    Returns
+    -------
+    numpy.ndarray
+        A cropped window from the image representing the PSF.
+    """
+
+    PSF = extract_centered_square(img, windowsize, coords)
+    
+    return PSF
+
+
+def gaussian_2d(xy, amp, x0, y0, sigma_major, sigma_minor, theta, offset):
+    """
+    Compute a 2D Gaussian function with elliptical symmetry.
+
+    Parameters
+    ----------
+    xy : tuple of numpy.ndarray
+        A tuple containing two arrays (x, y), where `x` and `y` are the grid coordinates 
+        where the Gaussian is evaluated.
+    amp : float
+        Amplitude of the Gaussian peak.
+    x0 : float
+        X-coordinate of the Gaussian center.
+    y0 : float
+        Y-coordinate of the Gaussian center.
+    sigma_major : float
+        Standard deviation of the Gaussian along the major axis.
+    sigma_minor : float
+        Standard deviation of the Gaussian along the minor axis.
+    theta : float
+        Rotation angle of the Gaussian's major axis from the x-axis (in radians).
+    offset : float
+        Constant offset to add to the Gaussian function.
+
+    Returns
+    -------
+    numpy.ndarray
+        Value of the 2D Gaussian function evaluated at each point (x, y).
+    """
+    x, y = xy
+    
+    x0 = float(x0)
+    y0 = float(y0)
+    a = (np.cos(theta)**2) / (2 * sigma_major**2) + (np.sin(theta)**2) / (2 * sigma_minor**2)
+    b = -(np.sin(2 * theta)) / (4 * sigma_major**2) + (np.sin(2 * theta)) / (4 * sigma_minor**2)
+    c = (np.sin(theta)**2) / (2 * sigma_major**2) + (np.cos(theta)**2) / (2 * sigma_minor**2)
+    return offset + amp * np.exp(-(a * ((x - x0)**2) + 2 * b * (x - x0) * (y - y0) + c * ((y - y0)**2)))
+
+
+def get_gauss_fit_initial_guess(img,
+                                amp_guess = None,
+                                x0_guess = None,
+                                y0_guess = None,
+                                sigma_major_guess = None,
+                                sigma_minor_guess = None,
+                                theta_guess = 0,
+                                offset_guess = None):
+    """
+   Generate an initial guess for fitting a 2D Gaussian to an image.
+
+   Parameters
+   ----------
+   img : numpy.ndarray
+       2D image array used for generating the initial guesses.
+   amp_guess : float, optional
+       Initial guess for the amplitude of the Gaussian. If not provided, the maximum pixel value of `img` is used.
+   x0_guess : float, optional
+       Initial guess for the x-coordinate of the Gaussian center. If not provided, the center of the image is used.
+   y0_guess : float, optional
+       Initial guess for the y-coordinate of the Gaussian center. If not provided, the center of the image is used.
+   sigma_major_guess : float, optional
+       Initial guess for the standard deviation along the major axis. If not provided, 1/4th of the image size is used.
+   sigma_minor_guess : float, optional
+       Initial guess for the standard deviation along the minor axis. If not provided, 1/4th of the image size is used.
+   theta_guess : float, optional
+       Initial guess for the rotation angle of the Gaussian (in radians). Default is 0.
+   offset_guess : float, optional
+       Initial guess for the constant background offset. If not provided, the minimum pixel value of `img` is used.
+
+   Returns
+   -------
+   numpy.ndarray
+       A 1D array of length 7, containing the initial guesses for the Gaussian fit parameters:
+       [amplitude, x0, y0, sigma_major, sigma_minor, theta, offset].
+   """
+    
+    initial_guess = np.zeros(7)
+    window_size = img.shape[0]
+    
+    
+    if amp_guess:
+        initial_guess[0] = amp_guess
+    else:
+        initial_guess[0] = img.max()
+    
+    
+    if x0_guess:
+        initial_guess[1] = x0_guess
+    else:
+        initial_guess[1] = window_size/2
+        
+    
+    if y0_guess:
+        initial_guess[2] = y0_guess
+    else:
+        initial_guess[2] = window_size/2
+        
+        
+    if sigma_major_guess:
+        initial_guess[3] = sigma_major_guess
+    else:
+        initial_guess[3] = window_size/4
+        
+        
+    if sigma_minor_guess:
+        initial_guess[4] = sigma_minor_guess
+    else:
+        initial_guess[4] = window_size/4
+    
+    
+    if theta_guess:
+        initial_guess[5] = theta_guess
+    else:
+        initial_guess[5] = 0
+        
+    if offset_guess:
+        initial_guess[6] = offset_guess
+    else:
+        initial_guess[6] = img.min()
+    
+       
+       
+    return initial_guess
+        
+    
+
+def fit_2d_gaussian(img,
+                    amp_guess = None,
+                    x0_guess = None,
+                    y0_guess = None,
+                    sigma_major_guess = None,
+                    sigma_minor_guess = None,
+                    theta_guess = 0,
+                    offset_guess = None):
+    """
+    Fit a 2D Gaussian function with elliptical symmetry to an image.
+    
+    This function estimates the parameters of a 2D Gaussian function that best fits
+    the input image using nonlinear least squares optimization. The Gaussian is defined
+    by its amplitude, center coordinates, standard deviations along the major and minor
+    axes, rotation angle, and offset.
+    
+    Parameters
+    ----------
+    img : numpy.ndarray
+        2D array representing the image data to which the Gaussian function will be fitted.
+    amp_guess : float, optional
+        Initial guess for the amplitude of the Gaussian peak. If None, the maximum value in the image will be used.
+    x0_guess : float, optional
+        Initial guess for the x-coordinate of the Gaussian center. If None, the center of the image is used.
+    y0_guess : float, optional
+        Initial guess for the y-coordinate of the Gaussian center. If None, the center of the image is used.
+    sigma_major_guess : float, optional
+        Initial guess for the standard deviation along the major axis. If None, a quarter of the image size is used.
+    sigma_minor_guess : float, optional
+        Initial guess for the standard deviation along the minor axis. If None, a quarter of the image size is used.
+    theta_guess : float, optional
+        Initial guess for the rotation angle of the Gaussian's major axis (in radians). Default is 0.
+    offset_guess : float, optional
+        Initial guess for the constant offset added to the Gaussian function. If None, the minimum value in the image is used.
+    
+    Returns
+    -------
+    popt : numpy.ndarray
+        Optimized parameters of the fitted Gaussian function in the order: 
+        [amplitude, x0, y0, sigma_major, sigma_minor, theta, offset].
+    pcov : 2D array
+        The covariance of popt, representing the estimated uncertainty of the fitted parameters.
+    """
+        
+    
+    
+    initial_guess = get_gauss_fit_initial_guess(img,
+                                                amp_guess,
+                                                x0_guess,
+                                                y0_guess,
+                                                sigma_major_guess,
+                                                sigma_minor_guess,
+                                                theta_guess,
+                                                offset_guess)
+    
+    
+    size_x, size_y = img.shape
+    x = np.linspace(0, size_x - 1, size_x)
+    y = np.linspace(0, size_y - 1, size_y)
+    xx, yy = np.meshgrid(x, y)
+
+    # Flatten the data and coordinate grids for curve fitting
+    grid_coords = np.vstack((xx.ravel(), yy.ravel()))
+    target_data = img.ravel()
+
+    popt,pcov = curve_fit(gaussian_2d,grid_coords,target_data,p0=initial_guess)
+
+                          
+    return popt,pcov 
+
+def gauss_fit_all_PSFs(img,coords,windowsize):
+    
+    """
+    Fit a 2D Gaussian to multiple PSFs extracted from an image based on specified coordinates.
+    
+    Parameters
+    ----------
+    img : numpy.ndarray
+        The input image from which PSFs are extracted.
+    
+    coords : numpy.ndarray
+        A 2D array of shape (n, 2) containing the coordinates of the detected PSFs,
+        where each row corresponds to [y_coordinate, x_coordinate].
+    
+    windowsize : int
+        The size of the window to extract around each PSF coordinate.
+    
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame containing the fitted parameters and their covariance for each PSF.
+    """
+    
+    
+    num_coords = len(coords)
+    
+    columns = ['amplitude', 
+                'x0', 
+                'y0', 
+                'sigma_major', 
+                'sigma_minor', 
+                'theta', 
+                'offset',
+                'amplitude_cov', 
+                'x0_cov', 
+                'y0_cov', 
+                'sigma_major_cov', 
+                'sigma_minor_cov', 
+                'theta_cov', 
+                'offset_cov',
+                'y0_global',
+                'x0_global']
+    
+    
+    gauss_fit_data = np.zeros((num_coords,len(columns)))
+    
+    for i, coord in enumerate(tqdm(coords)):
+        
+        
+        PSF,(up,left) = extract_centered_square(img, windowsize, coord,return_anchor=True)
+              
+       
+        
+        try:
+            popt,pcov = fit_2d_gaussian(PSF)
+            
+        except:
+            gauss_fit_data[i,:] = np.nan
+        else:
+            gauss_fit_data[i,:7] = popt
+            gauss_fit_data[i,7:14] =  np.sqrt(np.diag(pcov))
+            gauss_fit_data[i,14] =  up + popt[2]
+            gauss_fit_data[i,15] = left + popt[1]
+        
+
+    
+    df = pd.DataFrame(columns=columns,data = gauss_fit_data)
+    
+    return df
+        
+        
+
+def select_PSFs_from_df_old(df, 
+              min_amp=None, max_amp=None, 
+              min_x0=None, max_x0=None, 
+              min_y0=None, max_y0=None, 
+              min_sigma_major=None, max_sigma_major=None, 
+              min_sigma_minor=None, max_sigma_minor=None, 
+              min_theta=None, max_theta=None, 
+              min_offset=None, max_offset=None):
+    """
+    ---old version-----
+    will be replaced
+    """
+    
+    # Dictionary to hold column limits
+    limits = {
+        'amplitude': (min_amp, max_amp),
+        'x0': (min_x0, max_x0),
+        'y0': (min_y0, max_y0),
+        'sigma_major': (min_sigma_major, max_sigma_major),
+        'sigma_minor': (min_sigma_minor, max_sigma_minor),
+        'theta': (min_theta, max_theta),
+        'offset': (min_offset, max_offset)
+    }
+    
+    # Start with the full DataFrame
+    filtered_df = df
+    
+    # Apply filters based on the provided limits
+    for column, (min_val, max_val) in limits.items():
+        if min_val is not None:
+            filtered_df = filtered_df[filtered_df[column] >= min_val]
+        if max_val is not None:
+            filtered_df = filtered_df[filtered_df[column] <= max_val]
+    
+    return filtered_df
+
+
+
+def select_PSFs_from_df(df, limits_dict):
+    """
+    ---old version-----
+    will be replaced
+    """
+    
+    # Dictionary to hold column limits
+
+    
+    # Start with the full DataFrame
+    filtered_df = df
+    
+    # Apply filters based on the provided limits
+    for column, (min_val, max_val) in limits_dict.items():
+        if min_val is not None:
+            filtered_df = filtered_df[filtered_df[column] >= min_val]
+        if max_val is not None:
+            filtered_df = filtered_df[filtered_df[column] <= max_val]
+    
+    return filtered_df
+
+    
+
+
+
+def PSF_gauss_plot(img):
+    """
+    Fit a 2D Gaussian to the input image and plot the original image alongside the fitted Gaussian.
+
+    This function uses the `fit_2d_gaussian` function to estimate the parameters of a
+    2D Gaussian function that best fits the provided image data. It then generates a
+    plot displaying the original image and the corresponding fitted Gaussian image side by side.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        2D array representing the image data to which the Gaussian function will be fitted.
+    
+    Returns
+    -------
+    None
+        This function does not return any values. It generates plots directly.
+    """
+
+
+    popt,_ = fit_2d_gaussian(img)
+    size_x, size_y = img.shape
+    x = np.linspace(0, size_x - 1, size_x)
+    y = np.linspace(0, size_y - 1, size_y)
+    xx, yy = np.meshgrid(x, y)
+    
+    x0 = popt[1]
+    y0 = popt[2]
+
+    grid_coords = np.vstack((xx.ravel(), yy.ravel()))
+    
+    fit_data = gaussian_2d(grid_coords,*popt)
+    fit_data = fit_data.reshape((size_x,size_y))
+    
+    plt.subplot(121)
+    plt.imshow(img)
+    plt.scatter(x0,y0,marker='x',color='red')
+    
+    plt.subplot(122)
+    plt.imshow(fit_data)
+    
+#%%Processing of full channel data 
+
+def validate_limits_dict(all_channels_limits_dict, N_channels):
+    """
+    Validate that the provided limits dictionary matches the expected structure.
+
+    Parameters
+    ----------
+    all_channels_limits_dict : dict
+        A dictionary containing limits for selecting PSFs for each channel. 
+        Keys should be in the format 'channel{index}' (e.g., 'channel0', 'channel1').
+    
+    N_channels : int
+        The expected number of channels, used to determine the expected keys in the limits dictionary.
+
+    Raises
+    ------
+    ValueError
+        If the provided limits dictionary keys do not match the expected keys based on the number of channels.
+    """
+    expected_keys = {f'channel{idx}' for idx in range(N_channels)}
+    provided_keys = set(all_channels_limits_dict.keys())
+    
+    if provided_keys != expected_keys:
+        raise ValueError(f"Provided limits dictionary keys ({provided_keys}) do not match the expected keys ({expected_keys}).")
+
+
+def extract_psf_data_for_all_channels(binary_PSF_data,image_data,PSF_windowsize,all_channels_limits_dict = None):
+    
+    """
+   Extract and fit PSF data for all channels from binary PSF data and corresponding image data.
+
+   Parameters
+   ----------
+   binary_PSF_data : numpy.ndarray
+       A 3D array containing binary PSF data for each channel.
+   image_data : numpy.ndarray
+       A 3D array containing image data for each channel corresponding to the binary PSF data.
+   PSF_window_size : int
+       The size of the window used for extracting PSF data from the image.
+   all_channels_limits_dict : dict, optional
+       A dictionary containing limits for selecting PSFs for each channel. Keys should be in the format 'channel{index}'.
+
+   Returns
+   -------
+   dict
+       A dictionary where each key corresponds to a channel, and the value is a DataFrame containing the extracted and fitted PSF data for that channel.
+   """
+    
+    
+
+    N_channels = binary_PSF_data.shape[0]
+    
+    if image_data.shape[0] != N_channels:
+       raise ValueError(f"Number of channels in image_data ({image_data.shape[0]}) does not match "
+                        f"the number of channels in binary_PSF_data ({N_channels}).")
+   
+    # Validate the limits dictionary if provided
+    if all_channels_limits_dict is not None:
+        validate_limits_dict(all_channels_limits_dict, N_channels)
+     
+    channels_dict = {}
+    
+    for channel_idx in range(N_channels):
+        print(channel_idx)
+        df = extract_and_fit_psf_data(binary_PSF_data[channel_idx,...],
+                                      image_data[channel_idx,...],
+                                      PSF_windowsize)
+        
+        if all_channels_limits_dict:
+            
+            limits_dict = all_channels_limits_dict[f'channel{channel_idx}']
+            
+            df = select_PSFs_from_df(df, limits_dict)
+            
+        channels_dict[f'channel{channel_idx}'] = df
+        
+    return channels_dict
+
+
+
+        
 #%% utilty functions         
 def xy_to_polar_angle(x, y):
     """
@@ -607,7 +1226,7 @@ def xy_to_polar_angle(x, y):
     y = np.array(y)
     
     # Calculate angles using np.arctan2, which accounts for quadrant and handles x=0
-    angles = np.arctan2(y, x)
+    angles = np.arctan2(y,x)
     
     # Adjust negative angles to be within the range [0, 2π]
     angles = np.where(angles < 0, angles + 2*np.pi, angles)
@@ -663,7 +1282,7 @@ def remove_by_value(arr_in,val):
     
     return arr_out
     
-def get_coords(df,x_name = 'centroid-0',y_name = 'centroid-1'):
+def get_coords(df,x_name = 'centroid-1',y_name = 'centroid-0'):
     """
     
 
@@ -683,11 +1302,54 @@ def get_coords(df,x_name = 'centroid-0',y_name = 'centroid-1'):
 
     """
     
-    return np.array([df[x_name],df[y_name]]).T
+    return np.array([df[y_name],df[x_name]]).T
     
 
 
+def show_PSFs_channel_old(data,coords,channel_num):
+    """
+    
+    This function visualizes the specified channel by displaying the
+    image corresponding to that channel. It also overlays the coordinates of detected PSFs.
+    
+    Parameters
+    ----------
+    data : numpy.ndarray
+        3D array containing the PSF data across multiple channels. The shape should be (channels, height, width).
+    
+    coords : numpy.ndarray
+        2D array of shape (n, 2) containing the coordinates of the detected PSFs, where `n` is the number
+        of detected PSFs. Each row corresponds to [y_coordinate, x_coordinate].
+    
+    channel_num : int
+        Index of the channel to be displayed from the `data` array.
+    
+    Returns
+    -------
+    None
+        This function does not return any values. It generates a plot directly.
+    """
 
+    
+    plt.imshow(data[channel_num,...])
+    plt.scatter(coords[:,1],coords[:,0],marker='x',color='r')
+    
+    
+    
+def show_PSFs_channel(data,
+                      dict_PSF_dfs,
+                      channel_num,
+                      x_name = 'x0_global',
+                      y_name = 'y0_global'):
+    """
+    
+    """
+    df = dict_PSF_dfs[f'channel{channel_num}']
+    coords = get_coords(df,x_name,y_name)
+
+    
+    plt.imshow(data[channel_num,...])
+    plt.scatter(coords[:,1],coords[:,0],marker='x',color='r')
 
 
 
