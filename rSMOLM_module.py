@@ -1263,7 +1263,7 @@ def get_affine_all_channels(dict_PSF_dfs,main_channel = 0,min_samples=3,residual
     return dict_affine_transforms
     
 
-def plot_affine_transformation(dict_PSF_dfs, target_channel_name, source_channel_name, img_data=False):
+def plot_affine_transformation(dict_PSF_dfs, dict_affine_transforms, target_channel_name, source_channel_name, img_data=False):
     """
     Plot affine transformation between two channels and visualize the results.
 
@@ -1272,6 +1272,10 @@ def plot_affine_transformation(dict_PSF_dfs, target_channel_name, source_channel
     dict_PSF_dfs : dict of DataFrame
         A dictionary where keys are channel names and values are DataFrames
         containing the coordinates for each channel.
+        
+    dict_affine_transforms : dict 
+        A dictionary containing the estimated affine transformations for each channel,
+        with keys formatted as 'channelX->channelY' indicating the source and target channels.
 
     target_channel_name : str
         The name of the channel to which the source channel will be transformed.
@@ -1296,7 +1300,7 @@ def plot_affine_transformation(dict_PSF_dfs, target_channel_name, source_channel
     source_coordinates = get_coords(df_source_channel, x_name='x0_global', y_name='y0_global', keep_nans=False)
 
     # Compute the affine transformation
-    affine_transform = get_affine(source_coordinates, target_coordinates)
+
     
     # Apply the transformation to the source channel's coordinates
     transformed_coordinates = dict_affine_transforms[f'{source_channel_name}->{target_channel_name}'](source_coordinates)
@@ -1343,8 +1347,7 @@ def validate_limits_dict(all_channels_limits_dict, N_channels):
     if provided_keys != expected_keys:
         raise ValueError(f"Provided limits dictionary keys ({provided_keys}) do not match the expected keys ({expected_keys}).")
 
-
-def extract_psf_data_for_all_channels(binary_PSF_data,image_data,PSF_windowsize,all_channels_limits_dict = None):
+def extract_psf_data_for_all_channels(binary_PSF_data,image_data,PSF_windowsize):
     
     """
    Extract and fit PSF data for all channels from binary PSF data and corresponding image data.
@@ -1357,8 +1360,7 @@ def extract_psf_data_for_all_channels(binary_PSF_data,image_data,PSF_windowsize,
        A 3D array containing image data for each channel corresponding to the binary PSF data.
    PSF_window_size : int
        The size of the window used for extracting PSF data from the image.
-   all_channels_limits_dict : dict, optional
-       A dictionary containing limits for selecting PSFs for each channel. Keys should be in the format 'channel{index}'.
+
 
    Returns
    -------
@@ -1366,7 +1368,7 @@ def extract_psf_data_for_all_channels(binary_PSF_data,image_data,PSF_windowsize,
        A dictionary where each key corresponds to a channel, and the value is a DataFrame containing the extracted and fitted PSF data for that channel.
    """
     
-    
+    #add option to do gauss or not 
 
     N_channels = binary_PSF_data.shape[0]
     
@@ -1374,10 +1376,7 @@ def extract_psf_data_for_all_channels(binary_PSF_data,image_data,PSF_windowsize,
        raise ValueError(f"Number of channels in image_data ({image_data.shape[0]}) does not match "
                         f"the number of channels in binary_PSF_data ({N_channels}).")
    
-    # Validate the limits dictionary if provided
-    if all_channels_limits_dict is not None:
-        validate_limits_dict(all_channels_limits_dict, N_channels)
-     
+
     channels_dict = {}
     
     for channel_idx in range(N_channels):
@@ -1386,18 +1385,38 @@ def extract_psf_data_for_all_channels(binary_PSF_data,image_data,PSF_windowsize,
                                       image_data[channel_idx,...],
                                       PSF_windowsize)
         
-        if all_channels_limits_dict:
-            
-            limits_dict = all_channels_limits_dict[f'channel{channel_idx}']
-            
-            df = select_PSFs_from_df(df, limits_dict)
             
         channels_dict[f'channel{channel_idx}'] = df
         
     return channels_dict
 
 
+def filter_dict_PSF_dfs(dict_PSF_dfs,limits_dict): 
+    
+    N_channels = len(dict_PSF_dfs)
 
+    # Validate the limits dictionary
+    validate_limits_dict(limits_dict, N_channels)
+    
+    dict_PSF_dfs_filtered = {}
+    
+    for channel_idx in range(N_channels):
+        
+        df = dict_PSF_dfs[f'channel{channel_idx}']
+
+            
+        limits_dict_channel = limits_dict[f'channel{channel_idx}']
+        
+        df = select_PSFs_from_df(df, limits_dict_channel)
+            
+        dict_PSF_dfs_filtered[f'channel{channel_idx}'] = df
+        
+        
+    return dict_PSF_dfs_filtered
+        
+    
+    
+    
         
 #%% utilty functions         
 def xy_to_polar_angle(x, y):
@@ -1544,8 +1563,17 @@ def show_PSFs_channel(data,
     plt.imshow(data[channel_num,...])
     plt.scatter(coords[:,1],coords[:,0],marker='x',color='r')
 
+#%%
 
-
+def point_union(list_a_in,list_b_in,min_dist):
+    
+    list_a = np.array(list_a_in)
+    list_b = np.array(list_b_in)
+    
+    dist_M = distance_matrix(list_a, list_b)
+    idx = dist_M.min(axis=0)>min_dist
+    
+    return np.concatenate((list_a, list_b[idx]))
 
 
 
