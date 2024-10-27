@@ -2,4 +2,14 @@
 
 In this repository the code i developed during my masters thesis at instut Fresnel is shared.
 All coding was done entirely in python.
-So far this repository contains a collection of the developed functionalities and an demo file.
+
+---
+the file get_ROI.py shows how to extract the regions of interest (ROI) from an image of a dense sample
+
+the file get_affine.py shows how to get the affine trasformations that connect the different channels from a smaple of fluorescent beads
+
+the file beads_demo shows how to extract the intensity ratios from different channels for a example image of beads, this file can also be used for single fluorophores
+
+
+
+
