@@ -6,7 +6,9 @@ Created on Thu Oct 10 13:45:15 2024
 """
 import numpy as np 
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import pandas as pd
+
 
 from scipy.signal import convolve2d
 from skimage.draw import ellipse_perimeter
@@ -1416,7 +1418,176 @@ def filter_dict_PSF_dfs(dict_PSF_dfs,limits_dict):
         
     
     
+def dict_PSF_dfs_union(dict_PSF_dfs,
+                       dict_affine_transforms,
+                       main_channel = 0,
+                       x_name = 'x0_global',
+                       y_name = 'y0_global',
+                       max_dist = 3 ):
+    """
+    Combine coordinate points from multiple DataFrames of Point Spread Functions (PSFs)
+    by transforming coordinates from non-main channels to the main channel's coordinate
+    system using specified affine transformations. Points that are sufficiently close are
+    merged into a single point.
+
+    Parameters
+    ----------
+    dict_PSF_dfs : dict
+        A dictionary where keys are channel names (e.g., 'channel0', 'channel1') and values
+        are DataFrames containing PSF information, including coordinates defined by the
+        specified `x_name` and `y_name`.
     
+    dict_affine_transforms : dict
+        A dictionary containing affine transformations to map coordinates from non-main
+        channels to the main channel. Each key should be in the format
+        `'channel<i>->channel<j>'`, where `i` is the source channel and `j` is the target
+        channel (main_channel).
+    
+    main_channel : int, optional
+        The reference channel for alignment, typically where coordinates are defined. Default is 0.
+    
+    x_name : str, optional
+        The name of the column in the DataFrame that contains the x-coordinates. Default is 'x0_global'.
+    
+    y_name : str, optional
+        The name of the column in the DataFrame that contains the y-coordinates. Default is 'y0_global'.
+    
+    max_dist : float, optional
+        The maximum distance threshold for merging points. Points closer than this distance will
+        be merged into a single point. Default is 3.
+
+    Returns
+    -------
+    numpy.ndarray
+        A 2D array containing the union of points from all PSF DataFrames, with the
+        coordinates transformed to the main channel's coordinate system and merged as
+        specified.
+
+    Raises
+    ------
+    KeyError
+        If a specified channel or affine transformation does not exist in the provided
+        dictionaries.
+    """
+
+
+    main_channel_name = f'channel{main_channel}'
+    
+    main_df = dict_PSF_dfs[main_channel_name]
+    
+    union_points = get_coords(main_df, x_name = x_name, y_name = y_name)
+    
+    channel_names = list(dict_PSF_dfs.keys())
+     
+    not_main_channels = channel_names
+    not_main_channels.remove(main_channel_name)
+    
+    
+    for channel in not_main_channels:
+        
+        channel_df =  dict_PSF_dfs[channel]
+        channel_points = get_coords(channel_df, x_name = x_name, y_name = y_name)
+        
+        affine_transformation = dict_affine_transforms[f'{channel}->{main_channel_name}']
+        
+        channel_points_transformed = affine_transformation(channel_points)
+        
+        union_points = point_union(union_points,channel_points_transformed,min_dist = 3)
+        
+        
+        
+    
+    return union_points
+
+
+
+def show_multiple_channels(data, coords=None, dict_affine_transforms=None, main_channel=0, show_colorbar=False):
+    """
+    Display a grid of imshow subplots for each 2D slice of a 3D numpy array. Optionally,
+    overlay transformed coordinates as markers on each subplot and align coordinates to
+    a main channel based on affine transformations.
+
+    Parameters
+    ----------
+    data : numpy.ndarray
+        A 3D numpy array where the first dimension represents the number of 2D images
+        (channels) to plot, and the remaining two dimensions represent each image's height
+        and width.
+    
+    coords : numpy.ndarray, optional
+        A 2D numpy array of shape (N, 2), where N is the number of coordinates.
+        Each row should contain the (y, x) coordinates of a point to be marked on each subplot.
+    
+    dict_affine_transforms : dict, optional
+        Dictionary containing affine transformations to map coordinates from other channels
+        to the main channel. Each key should be in the format `'channel<i>->channel<j>'`, where
+        `i` is the source channel and `j` is the target channel (main_channel). The dictionary 
+        values should be instances of `kimage.transform._geometric.AffineTransform`.
+    
+    main_channel : int, optional
+        The reference channel for alignment, typically where coordinates are defined.
+        Default is 0.
+
+    show_colorbar : bool, optional
+        If True, display a colorbar for each subplot. Default is False.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The Matplotlib figure object containing the grid of subplots.
+    
+    ax : numpy.ndarray of matplotlib.axes._subplots.AxesSubplot
+        A flattened array of Matplotlib axes objects for each subplot, allowing further customization.
+
+    Raises
+    ------
+    ValueError
+        If the input data is not a 3D numpy array.
+    """
+
+    # Check if data is 3D
+    if data.ndim != 3:
+        raise ValueError("Input data must be a 3D numpy array.")
+    
+    num_images = data.shape[0]
+    rows = np.ceil(np.sqrt(num_images)).astype(dtype=int)
+    cols = np.ceil(num_images / rows).astype(dtype=int)
+    
+    # Create a figure with the calculated number of rows and columns, sharing x and y axes
+    fig, ax = plt.subplots(rows, cols, sharex=True, sharey=True, figsize=(cols * 3, rows * 3))
+    
+    # Flatten the axes array for easier indexing, and iterate over each image
+    ax = ax.flatten()
+    for channel_idx in range(num_images):
+        im = ax[channel_idx].imshow(data[channel_idx], cmap='viridis')
+        ax[channel_idx].set_title(f'Channel {channel_idx}')
+        
+        # Overlay markers if coords are provided
+        if coords is not None:
+            if dict_affine_transforms is not None:
+                if channel_idx != main_channel:
+                    name = f'channel{channel_idx}->channel{main_channel}'
+                    affine_transformation = dict_affine_transforms[name]
+                    transformed_coords = affine_transformation.inverse(coords)
+                    ax[channel_idx].scatter(transformed_coords[:, 1], transformed_coords[:, 0], c='r', marker='x')
+                else: 
+                    ax[channel_idx].scatter(coords[:, 1], coords[:, 0], c='r', marker='x')
+        
+        # Add a colorbar if requested
+        if show_colorbar:
+            plt.colorbar(im, ax=ax[channel_idx], orientation='vertical')
+
+    # Hide any unused subplots
+    for j in range(num_images, rows * cols):
+        ax[j].axis('off')
+    
+    # Adjust layout for clarity
+    plt.tight_layout()
+    return fig, ax
+
+
+    
+
         
 #%% utilty functions         
 def xy_to_polar_angle(x, y):
@@ -1554,8 +1725,42 @@ def show_PSFs_channel(data,
                       x_name = 'x0_global',
                       y_name = 'y0_global'):
     """
-    
+    Display a specific channel of a multi-channel image along with the corresponding 
+    points of interest (PSFs) marked on top.
+
+    Parameters
+    ----------
+    data : numpy.ndarray
+        A 3D numpy array where the first dimension represents the number of channels, 
+        and the remaining two dimensions correspond to the height and width of each image.
+
+    dict_PSF_dfs : dict
+        A dictionary where keys are channel identifiers (e.g., 'channel0', 'channel1', etc.) 
+        and values are DataFrames containing point spread function (PSF) data, including 
+        coordinates for each PSF.
+
+    channel_num : int
+        The index of the channel to display from the data array. This should correspond 
+        to a key in the `dict_PSF_dfs`.
+
+    x_name : str, optional
+        The name of the column in the PSF DataFrame that contains the x-coordinates. 
+        Default is 'x0_global'.
+
+    y_name : str, optional
+        The name of the column in the PSF DataFrame that contains the y-coordinates. 
+        Default is 'y0_global'.
+
+    Returns
+    -------
+    None
+        The function displays an image of the specified channel with PSF coordinates 
+        overlaid, but does not return any values.
+
+
+
     """
+
     df = dict_PSF_dfs[f'channel{channel_num}']
     coords = get_coords(df,x_name,y_name)
 
@@ -1563,9 +1768,45 @@ def show_PSFs_channel(data,
     plt.imshow(data[channel_num,...])
     plt.scatter(coords[:,1],coords[:,0],marker='x',color='r')
 
-#%%
 
 def point_union(list_a_in,list_b_in,min_dist):
+    """
+    Combine two lists of coordinates by merging points from the second list into the first list
+    based on a minimum distance threshold. Points from the second list that are closer than the
+    specified minimum distance to any point in the first list are excluded.
+
+    Parameters
+    ----------
+    list_a_in : array-like
+        A collection of points (e.g., a list or numpy array) representing coordinates in a 2D space.
+        Each point should be an iterable of length 2 (e.g., [x, y]).
+
+    list_b_in : array-like
+        Another collection of points (e.g., a list or numpy array) representing coordinates in a 2D space.
+        Each point should be an iterable of length 2 (e.g., [x, y]).
+
+    min_dist : float
+        The minimum distance threshold. Points in `list_b` will only be added to the resulting list
+        if they are further than this distance from all points in `list_a`.
+
+    Returns
+    -------
+    numpy.ndarray
+        A 2D array containing the combined coordinates from both lists. Points from `list_b` are included
+        only if they are sufficiently distant from the points in `list_a` as defined by `min_dist`.
+
+    Examples
+    --------
+    >>> list_a = [[0, 0], [5, 5]]
+    >>> list_b = [[1, 1], [6, 6]]
+    >>> min_dist = 2
+    >>> result = point_union(list_a, list_b, min_dist)
+    >>> print(result)
+    [[0, 0],
+     [5, 5],
+     [6, 6]]  # [1, 1] is excluded because it is less than min_dist from [0, 0]
+    """
+
     
     list_a = np.array(list_a_in)
     list_b = np.array(list_b_in)
@@ -1576,8 +1817,203 @@ def point_union(list_a_in,list_b_in,min_dist):
     return np.concatenate((list_a, list_b[idx]))
 
 
+#%% box integration
+def box_integration(img):
+    """
+    Compute a modified sum of pixel values in a 2D image by subtracting the 
+    background estimated from the aveage value of the border pixels.
+
+    Parameters
+    ----------
+    img : array-like
+        A 2D array representing the image from which the integration is computed. 
+        The input can be a list or any array-like structure that can be converted 
+        to a NumPy array.
+
+    Returns
+    -------
+    float
+        The result of the integration, which is the total sum of pixel values 
+        minus the contribution of the border pixels.
+
+
+    """
+    img = np.array(img)
+    length_y = img.shape[0]
+    length_x = img.shape[1]
+    num_border_pixels = 2 * (length_y + length_x - 2)
+    mean = np.concatenate((img[0, :].reshape(length_x),
+                           img[-1, :].reshape(length_x),
+                           img[1:-1, 0].reshape(length_y - 2),
+                           img[1:-1, -1].reshape(length_y - 2))).mean()
+    
+    return img.sum() - num_border_pixels * mean
+
+              
+
+def box_integration_one_channel(img, coords, windowsize):
+    """
+    Calculate the box-integrated intensities of a 2D image for specified 
+    coordinates by extracting at the regions specified by coords.
+
+    Parameters
+    ----------
+    img : array-like
+        A 2D array representing the image from which the intensities will be 
+        extracted. The input can be a list or any array-like structure that 
+        can be converted to a NumPy array.
+
+    coords : array-like
+        A 2D array or list of shape (N, 2), where N is the number of coordinates. 
+        Each row should contain the (y, x) coordinates indicating the centers 
+        of the regions to integrate.
+
+    windowsize : int
+        The size of the square window around each coordinate from which the 
+        integration is performed. It should be an odd integer to ensure a 
+        centered square.
+
+    Returns
+    -------
+    numpy.ndarray
+        A 1D array of shape (N,) containing the box-integrated intensity values 
+        for each specified coordinate.
+
+    """
+    estimated_intensities = np.zeros((len(coords)))
+    
+    for i, coord in enumerate(coords):
+        PSF = extract_centered_square(img, windowsize, coord)
+        estimated_intensities[i] = box_integration(PSF)
+        
+    return estimated_intensities
+
+       
+def box_integration_all_channels_to_df(img_data,
+                                        coords,
+                                        dict_affine_transforms,
+                                        PSF_windowsize,
+                                        main_channel=0):
+    """
+    Calculate box-integrated intensities for multiple channels of image data 
+    at specified coordinates, returning the results in a pandas DataFrame.
+
+    Parameters
+    ----------
+    img_data : numpy.ndarray
+        A 3D NumPy array where the first dimension represents the number of 
+        channels (2D images) and the remaining two dimensions represent each 
+        image's height and width.
+
+    coords : array-like
+        A 2D array or list of shape (N, 2), where N is the number of coordinates. 
+        Each row should contain the (y, x) coordinates indicating the centers 
+        of the regions to integrate.
+
+    dict_affine_transforms : dict
+        A dictionary containing affine transformations for each channel. The keys 
+        should be formatted as `f'{current_channel_name}->{main_channel_name}'`, 
+        and the values should be affine transformation objects from skimage.transform.
+
+    PSF_windowsize : int
+        The size of the square window around each coordinate from which the 
+        integration is performed. It should be an odd integer to ensure a 
+        centered square.
+
+    main_channel : int, optional
+        The index of the main channel, used for coordinate transformation. 
+        Default is 0.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame where each column corresponds to a channel, and each row 
+        contains the box-integrated intensity values for the specified coordinates.
+
+    Examples
+    --------
+    >>> img_data = np.random.rand(3, 10, 10)  # A random 3D image with 3 channels
+    >>> coords = np.array([[5, 5], [2, 2]])  # Coordinates for integration
+    >>> dict_affine_transforms = { 'channel1->channel0': SomeAffineTransformObject }
+    >>> df_intensities = box_integration_all_channels_to_df(img_data, coords, 
+    ...                                                       dict_affine_transforms, 
+    ...                                                       PSF_windowsize=3)
+    >>> print(df_intensities)
+    """
+    N_channels = img_data.shape[0]
+    channel_names = [f'channel{i}' for i in range(N_channels)]
+    main_channel_name = f'channel{main_channel}'
+    
+    df = pd.DataFrame(columns=channel_names)
+    
+    for channel_idx in range(N_channels):
+        if channel_idx == main_channel:
+            estimated_intensities = box_integration_one_channel(img_data[channel_idx, ...], coords, PSF_windowsize)
+            df[f'channel{channel_idx}'] = estimated_intensities
+        else:
+            current_channel_name = f'channel{channel_idx}'
+            affine_transformation = dict_affine_transforms[f'{current_channel_name}->{main_channel_name}']
+            transformed_coords = affine_transformation.inverse(coords)
+            estimated_intensities = box_integration_one_channel(img_data[channel_idx, ...], transformed_coords, PSF_windowsize)
+            df[f'channel{channel_idx}'] = estimated_intensities
+    
+    return df
 
 
 
 
+#%% histogram visualization
 
+
+def intensity_ratios_hist(intensity_df, bins=50, alpha=0.6):
+    """
+    Plots a histogram of intensity ratios for each channel, showing the proportion 
+    of each channel's intensity relative to the total intensity across all channels.
+
+    Parameters
+    ----------
+    intensity_df : pandas.DataFrame
+        A DataFrame where each column represents intensity values for a particular 
+        channel, and each row is a separate data point.
+
+    bins : int, optional
+        The number of bins to use for the histogram, by default 50.
+
+    alpha : float, optional
+        The transparency level for the histogram bars, with 1 being fully opaque 
+        and 0 being fully transparent. Default is 0.6.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The Matplotlib figure object containing the histogram plot.
+
+    ax : matplotlib.axes._subplots.AxesSubplot
+        The Matplotlib axes object for further customization of the plot.
+
+
+    """
+    total_intensity = intensity_df.sum(axis=1)
+    channel_names = intensity_df.keys()
+    
+    fig, ax = plt.subplots()
+    colors = list(mcolors.TABLEAU_COLORS.values())
+    
+    for i, channel in enumerate(channel_names):
+        intensity_ratio = intensity_df[channel].values / total_intensity
+        ax.hist(intensity_ratio, bins=bins, alpha=alpha, color=colors[i], label=channel)
+        ax.hist(intensity_ratio, bins=bins, alpha=alpha, color=colors[i], histtype='step')
+        
+    ax.set_xlabel('Ratio')
+    ax.set_ylabel('Counts')
+    ax.legend()
+    ax.grid()
+    ax.set_title('Intensity Ratios')
+    
+    return fig, ax
+
+    
+
+    
+    
+    
