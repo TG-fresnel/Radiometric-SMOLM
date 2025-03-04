@@ -9,51 +9,15 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from skimage.measure import label, regionprops_table
-from skimage.morphology import (
-    remove_small_objects,
-    remove_small_holes,
-    binary_dilation,
-    binary_erosion,
-    square,
-    convex_hull_object
-)
 
-from utility_functions import *
 
 
 fontsize = 15
 plt.rcParams["font.size"] = str(fontsize)
 
 
-def binarize(image, threshold=1, radius=1, smin=1000):
-    """
-    The following function binarizes the image and then eliminates
-    small holes and/or small objects.
-
-    Parameters
-    ----------
-        threshold (float): multiplicative factor with respect the mean of the array
-        radius (float): radius of the erosion and dilation steps
-        smin (int):  minimum elements for a hole or an object to not be removed
-
-    Return
-    ------
-    mask (array-like): A binary image of the ROIs.
-    """
-
-    # First we threshold the image with respect its mean and the given factor
-    mask = image > (threshold * np.mean(image))
-    # Erode to eliminatte noise
-    mask = binary_erosion(mask, square(radius))
-    # Dilate back
-    mask = binary_dilation(mask, square(radius))
-    # Remove small holes within the windows
-    mask = remove_small_holes(mask, smin)
-    # Remove small objects within the windows
-    mask = remove_small_objects(mask, smin)
-    return mask
-
+from rSMOLM_module import *
+from utility_functions import *
 
 img_path = 'C:/Users/Tobias/Documents/Data/HexBFP/20250303/Pupil/'
 analysis_path = 'C:/Users/Tobias/Documents/Data/HexBFP/20250303/Pupil/'
