@@ -91,6 +91,7 @@ img_data = data_unmasked*extracted_masks
 fig,_ = show_multiple_channels(img_data)
 
 #%%
+conv_masks_orentation_list = ROI_props['angles'].values
 conv_masks_dict = create_conv_mask_dict(conv_masks_orentation_list,
                                         conv_masks_minor_major_axis_ratio_list,
                                         minimal_axis_length,
@@ -101,3 +102,39 @@ PSF_data = detect_psf_areas_all_channels(img_data,
                                          conv_masks_dict,
                                          show_final_plot = show_final_plot_psf_detection,
                                          show_all_plots = show_all_plots_psf_detection)
+
+#%%
+erroded_masks = erode_masks_with_disk(extracted_masks,footprint_radius=erosion_footprint_radius)
+
+#Appyling erroded masks to exclude border regions
+PSF_data = PSF_data * erroded_masks
+
+#perform opening to get rid of small regions
+PSF_data = open_masks_area(PSF_data,min_size=min_size_PSF)
+#%%
+
+dict_PSF_dfs = extract_psf_data_for_all_channels(PSF_data,img_data,12)
+
+
+#%%
+show_PSFs_channel(img_data,dict_PSF_dfs,0)
+
+
+#%%
+show_PSFs_channel(img_data,dict_PSF_dfs,0,'centroid-1','centroid-0')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
