@@ -180,8 +180,10 @@ def auto_order_ROI(ROI_props, ROI_masks):
 
     # Convert Cartesian coordinates of ROIs to polar angles (radians),
     angles = xy_to_polar_angle(shifted_centroids[:, 0], -shifted_centroids[:, 1])
+    
+    ROI_props['angles'] = angles
     # Shift angles to reference them from the vertical line (y-axis)
-    angles = add_angles(angles, np.pi)
+    angles_vert = add_angles(angles, np.pi)
 
 
 
@@ -189,7 +191,7 @@ def auto_order_ROI(ROI_props, ROI_masks):
     radial_channel_idx = np.argmin(distance_center)
 
     # Sort the remaining ROIs based on their angular positions (clockwise order)
-    angular_sorted_idx = np.argsort(angles)
+    angular_sorted_idx = np.argsort(angles_vert)
 
     # Remove the central ROI from the angular sorted list
     azimuthal_channel_ordered_idx = remove_by_value(angular_sorted_idx, radial_channel_idx)
@@ -1778,6 +1780,7 @@ def show_PSFs_channel(data,
     
     plt.imshow(data[channel_num,...])
     plt.scatter(coords[:,1],coords[:,0],marker='x',color='r')
+    plt.colorbar()
 
 
 def point_union(list_a_in,list_b_in,min_dist):
