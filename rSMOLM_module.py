@@ -193,7 +193,7 @@ def auto_order_ROI(ROI_props, ROI_masks):
 
     # Remove the central ROI from the angular sorted list
     azimuthal_channel_ordered_idx = remove_by_value(angular_sorted_idx, radial_channel_idx)
-
+       
     # Concatenate the central ROI index with the ordered indices
     new_idx = np.concatenate(([radial_channel_idx], azimuthal_channel_ordered_idx))
 
@@ -230,7 +230,7 @@ def order_ROI(ROI_props, ROI_masks, new_idx):
     ROI_props = ROI_props.reset_index(drop=True)
 
     new_idx_for_mask = np.concatenate(([0],new_idx+1))
-
+    
     ROI_masks = relabel_masks(ROI_masks, new_idx_for_mask)
     
     
@@ -276,7 +276,7 @@ def relabel_masks(arr, new_order):
            [3, 1, 2, 0]])
     """
     # Create a mapping from the current value to the new value
-    mapping = {i: new_order[i] for i in range(len(new_order))}
+    mapping = {new_order[i]: i for i in range(len(new_order))}
 
     # Use numpy's vectorized function to replace the values efficiently
     vectorized_replace = np.vectorize(lambda x: mapping[x])
