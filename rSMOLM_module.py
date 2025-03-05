@@ -1550,8 +1550,19 @@ def show_multiple_channels(data, coords=None, dict_affine_transforms=None, main_
         raise ValueError("Input data must be a 3D numpy array.")
     
     num_images = data.shape[0]
-    rows = np.ceil(np.sqrt(num_images)).astype(dtype=int)
-    cols = np.ceil(num_images / rows).astype(dtype=int)
+    
+    #determine the number of subplots, along 2 dimennsion. Not specified to x and y yet. 
+    n_subplots_dim1 = np.ceil(np.sqrt(num_images)).astype(dtype=int)
+    n_subplots_dim2 = np.ceil(num_images / n_subplots_dim1).astype(dtype=int)
+    
+    #the bigger value is assigned to the number of cols so the windows fits the typical dimension of a screen 
+    if n_subplots_dim1 > n_subplots_dim2:
+        cols = n_subplots_dim1
+        rows = n_subplots_dim2
+    else:
+        cols = n_subplots_dim2
+        rows = n_subplots_dim1
+        
     
     # Create a figure with the calculated number of rows and columns, sharing x and y axes
     fig, ax = plt.subplots(rows, cols, sharex=True, sharey=True, figsize=(cols * 3, rows * 3))
