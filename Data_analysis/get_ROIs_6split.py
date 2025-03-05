@@ -11,11 +11,33 @@ This file creates the ROI_masks.npy and ROI.pkl files
 import numpy as np
 import pandas as pd 
 import matplotlib.pyplot as plt
+import argparse
 
+import sys
+import os
+
+SCRIPT_DIR = os.path.dirname(os.getcwd())
+sys.path.append(SCRIPT_DIR)
 
 # Personal module
 
 from rSMOLM_module import *
+
+threshold_default = 0.8
+
+#%%
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-th","--threshold",
+                    required=False, 
+                    type=float,
+                    default=threshold_default,
+                    action='store',
+                    help="set threshold for binarization, default is 0.8")
+
+args = parser.parse_args()
+
+threshold = args.threshold
 
 #%%
 
@@ -27,7 +49,7 @@ analysis_path = 'C:/Users/Tobias/Documents/Data/HexBFP/20250303/Registration/' #
 
 imgROI = Vflip(1.*plt.imread(img_path))
 
-threshold = 0.9
+
 # Now I binarize to define the areas of interest
 ROI = binarize(imgROI,threshold=threshold, radius = 2)
 ROI = convex_hull_object(ROI)
@@ -59,5 +81,6 @@ plt.imshow(ROI_masks)
 plt.colorbar()
 plt.tight_layout()
 plt.savefig(analysis_path+"Labeled_Masks.svg", transparent=True)
+plt.show()
 
 
