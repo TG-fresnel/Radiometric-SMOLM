@@ -384,7 +384,7 @@ def extract_masks(ROI_masks, ROI_props, extra_box_pixels = 0):
     box_length = ( np.round(np.max([ROI_props['axis_major_length']])).astype(int) + extra_box_pixels)
 
     
-    extracted_masks = extract_channels_from_single_frame(ROI_masks,4,box_length,ROI_centers)
+    extracted_masks = extract_channels_from_single_frame(ROI_masks,N_channels,box_length,ROI_centers)
     
     for i in range(N_channels):
  
