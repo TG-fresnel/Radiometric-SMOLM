@@ -23,41 +23,39 @@ plt.rcParams["font.size"] = str(fontsize)
 
 #%%
 
-def plot_radial_lines(target_x,target_y,num_radial_sections,length_radial_lines = 800):
+def plot_radial_lines(center_x,center_y,num_radial_sections,length_radial_lines = 800,angular_offset_deg =  90):
+    
+    #function to split a set of radial lines, from the  
     
     alpha_deg = 360/num_radial_sections #angle between the angualr lines, for 5 outer section is 360/5
     alpha_rad = np.deg2rad(alpha_deg)
     
-    for i in range(0,num_radial_sections + 1):
-        
-        
-        angle = alpha_rad * i
+    angular_offset_rad = np.deg2rad(angular_offset_deg)
     
+    for i in range(0,num_radial_sections):
+        
+        
+        angle = alpha_rad * i + angular_offset_rad 
 
-        x1 = target_x
-        y1 = target_y
+        print(np.rad2deg(angle))        
+
+        x2 = center_x + np.cos(angle)*length_radial_lines
+        y2 = center_y + np.sin(angle)*length_radial_lines
+
         
-        x2 = x1 + np.cos(angle)*length_radial_lines
-        y2 = y1 + np.sin(angle)*length_radial_lines
-        
-        print(i)
-        
-        plt.plot([y1, y2],[x1, x2],'r',lw=1,ls = '--')
+        plt.plot([center_x, x2],[center_y, y2],'r',lw=1,ls = '--')
     
 #%%
 
 
 img_path = 'C:/Users/Tobias/Documents/Data/HexBFP/20250303/Pupil/'
-file = 'BFP00008.tif'
+file = 'BFP00001.tif'
 
-#target values of the prism center
-target_x = float(input("input target x position "))
-target_y = float(input("input target y position "))
 
 
 
 num_radial_sections = 5 
-
+11
 
 threshold = 0.8
 wavelength = 680
@@ -108,9 +106,9 @@ data = img*mask
 plt.figure()
 plt.imshow(data, cmap='inferno')
 plt.colorbar()
-plt.scatter(center[1] , center[0],label='current center', marker='+', color='green')
-plt.scatter(target_y , target_x,label='target center', marker='+', color='red')
-plot_radial_lines(target_x,target_y,num_radial_sections)
+plt.scatter(center[1] , center[0],label='center', marker='+', color='red')
+
+plot_radial_lines(center[1] , center[0],num_radial_sections)
 plt.xlabel(r"$x$ [pix]")
 plt.ylabel(r"$y$ [pix]")
 plt.title("Pupil")

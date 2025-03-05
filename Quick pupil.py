@@ -22,7 +22,7 @@ plt.rcParams["font.size"] = str(fontsize)
 
 
 img_path = 'C:/Users/Tobias/Documents/Data/HexBFP/20250303/Pupil/'
-file = 'BFP00008.tif'
+file = 'BFP00001.tif'
 
 threshold = 0.8
 wavelength = 680
